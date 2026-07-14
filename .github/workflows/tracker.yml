@@ -28,6 +28,7 @@ jobs:
 
       - name: Save seen tweets (persist state)
         run: |
+          touch seen_tweets.txt
           git config user.name "ca-tracker-bot"
           git config user.email "actions@github.com"
           git add seen_tweets.txt
