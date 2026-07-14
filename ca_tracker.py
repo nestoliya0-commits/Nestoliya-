@@ -1,11 +1,10 @@
 """
-CA Tracker Bot (GitHub Actions version)
-----------------------------------------
-Runs ONCE per execution (GitHub Actions schedules it every 15 min).
-Checks the latest tweets from a Twitter/X account for pump.fun / Solana
-contract addresses, verifies them on DexScreener, and sends a Telegram alert.
-
-Tracks: @stoolpresidente
+CA Tracker Bot (GitHub Actions version, multi-account)
+--------------------------------------------------------
+Runs ONCE per execution (GitHub Actions schedules it every 30 min).
+Checks the latest tweets from every account listed in accounts.txt for
+pump.fun / Solana contract addresses, verifies them on DexScreener, and
+sends a Telegram alert.
 """
 
 import re
@@ -14,7 +13,7 @@ import requests
 import snscrape.modules.twitter as sntwitter
 
 # ============ CONFIG ============
-TWITTER_USERNAME = "stoolpresidente"
+ACCOUNTS_FILE = "accounts.txt"
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 SEEN_TWEETS_FILE = "seen_tweets.txt"
@@ -23,6 +22,15 @@ SEEN_TWEETS_FILE = "seen_tweets.txt"
 SOLANA_ADDRESS_RE = re.compile(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b')
 PUMPFUN_LINK_RE = re.compile(r'pump\.fun/(?:coin/)?([1-9A-HJ-NP-Za-km-z]{32,44})')
 SOLANA_PREFIX_RE = re.compile(r'solana:([1-9A-HJ-NP-Za-km-z]{32,44})', re.IGNORECASE)
+
+
+def load_accounts():
+    try:
+        with open(ACCOUNTS_FILE, "r") as f:
+            return [line.strip().lstrip("@") for line in f if line.strip() and not line.strip().startswith("#")]
+    except FileNotFoundError:
+        print(f"[ERROR] {ACCOUNTS_FILE} not found!")
+        return []
 
 
 def load_seen():
@@ -90,9 +98,9 @@ def verify_token(ca):
         return None
 
 
-def send_telegram_alert(ca, tweet_url, info):
+def send_telegram_alert(username, ca, tweet_url, info):
     text = (
-        f"🚨 New CA detected from @{TWITTER_USERNAME}\n\n"
+        f"🚨 New CA detected from @{username}\n\n"
         f"Token: {info['name']} ({info['symbol']})\n"
         f"CA: `{ca}`\n"
         f"Price: ${info['price_usd']}\n"
@@ -111,33 +119,42 @@ def send_telegram_alert(ca, tweet_url, info):
 
 
 def main():
-    print(f"Checking latest tweets from @{TWITTER_USERNAME}...")
-    seen = load_seen()
-    tweets = get_latest_tweets(TWITTER_USERNAME)
-
-    if not tweets:
-        print("No tweets fetched (scraper may be rate-limited or blocked).")
+    accounts = load_accounts()
+    if not accounts:
+        print("No accounts to check. Add usernames to accounts.txt")
         return
 
-    for tweet in reversed(tweets):
-        tid = str(tweet.id)
-        if tid in seen:
+    print(f"Checking {len(accounts)} accounts...")
+    seen = load_seen()
+
+    for username in accounts:
+        print(f"--- Checking @{username} ---")
+        tweets = get_latest_tweets(username)
+
+        if not tweets:
+            print(f"No tweets fetched for @{username} (may be rate-limited or blocked).")
             continue
 
-        seen.add(tid)
-        save_seen(tid)
+        for tweet in reversed(tweets):
+            tid = str(tweet.id)
+            if tid in seen:
+                continue
 
-        ca = extract_ca(tweet.rawContent)
-        if ca:
-            print(f"[FOUND CA] {ca} in tweet {tid}")
-            info = verify_token(ca)
-            if info:
-                send_telegram_alert(ca, tweet.url, info)
-            else:
-                print(f"[SKIPPED] {ca} — not verified on DexScreener yet")
+            seen.add(tid)
+            save_seen(tid)
+
+            ca = extract_ca(tweet.rawContent)
+            if ca:
+                print(f"[FOUND CA] {ca} from @{username} in tweet {tid}")
+                info = verify_token(ca)
+                if info:
+                    send_telegram_alert(username, ca, tweet.url, info)
+                else:
+                    print(f"[SKIPPED] {ca} — not verified on DexScreener yet")
 
     print("Check complete.")
 
 
 if __name__ == "__main__":
     main()
+    
